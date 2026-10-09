@@ -1,23 +1,11 @@
-import { useEffect, useCallback } from "react";
+import { useEffect } from "react";
 import { StatusBar } from "expo-status-bar";
 import * as ScreenOrientation from "expo-screen-orientation";
-import CastContext, { useCastChannel } from "react-native-google-cast";
+import CastContext from "react-native-google-cast";
 import MainStack from "./navigation";
-
-// Custom channel the receiver broadcasts its logs on. Must match DEBUG_NS in
-// receiver/index.html. Lets us read receiver-side logs in Metro since
-// chrome://inspect is blocked on Chromecast.
-const DEBUG_NS = "urn:x-cast:com.cast4tv.debug";
+import { colors } from "./theme";
 
 export default function App() {
-  // Print receiver-side logs (broadcast over DEBUG_NS) into Metro.
-  useCastChannel(
-    DEBUG_NS,
-    useCallback((message) => {
-      console.log("* [CAST][receiver]", JSON.stringify(message));
-    }, [])
-  );
-
   useEffect(() => {
     // app.json declares orientation "default" so the OS *allows* landscape
     // (required for the video's fullscreen rotation). Keep the app itself
@@ -26,41 +14,54 @@ export default function App() {
     ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
   }, []);
 
-  // DEBUG: trace the full Cast session lifecycle. When you tap the Cast button
-  // and "nothing happens", the receiver (EC2D8F42) is failing to launch — this
-  // logs WHERE it stops:
-  //   onCastStateChanged: NotConnected → Connecting → (Connected | back to
-  //     NotConnected). Falling back to NotConnected == launch/connect failed.
-  //   onSessionStartFailed: fires with the error explaining WHY the receiver
-  //     didn't launch (wrong/unpublished app id, device not authorized, etc.).
-  //   onSessionStarted: receiver launched OK — problem is downstream (loadMedia).
+  // DEBUG: trace device discovery + the full Cast session lifecycle.
+  //   devices: [] forever            → discovery broken (network / permissions)
+  //   castState Connecting → NoDevicesAvailable/NotConnected
+  //                                  → receiver (EC2D8F42) failed to launch;
+  //                                    onSessionStartFailed logs WHY.
+  //   session STARTED                → connect OK, problem is in loadMedia.
   useEffect(() => {
     const sm = CastContext.getSessionManager();
+    const dm = CastContext.getDiscoveryManager();
     const subs = [
       CastContext.onCastStateChanged((state) =>
         console.log("* [CAST] castState:", state)
       ),
       sm.onSessionStarting(() => console.log("* [CAST] session STARTING")),
       sm.onSessionStarted((s) =>
-        console.log("* [CAST] session STARTED, device:", s?.device?.friendlyName)
+        console.log("* [CAST] session STARTED, id:", s?.id)
       ),
       sm.onSessionStartFailed((s, error) =>
         console.log("* [CAST] session START FAILED:", JSON.stringify(error))
       ),
-      sm.onSessionSuspended(() => console.log("* [CAST] session SUSPENDED")),
+      sm.onSessionSuspended((s, reason) =>
+        console.log("* [CAST] session SUSPENDED:", reason)
+      ),
       sm.onSessionResuming(() => console.log("* [CAST] session RESUMING")),
       sm.onSessionResumed(() => console.log("* [CAST] session RESUMED")),
       sm.onSessionEnding(() => console.log("* [CAST] session ENDING")),
       sm.onSessionEnded((s, error) =>
         console.log("* [CAST] session ENDED:", JSON.stringify(error ?? "no error"))
       ),
+      dm.onDevicesUpdated((devices) =>
+        console.log(
+          "* [CAST] devices:",
+          JSON.stringify(devices.map((d) => d.friendlyName))
+        )
+      ),
     ];
+    CastContext.getCastState().then((state) =>
+      console.log("* [CAST] initial castState:", state)
+    );
+    dm.startDiscovery()
+      .then(() => console.log("* [CAST] discovery started"))
+      .catch((e) => console.log("* [CAST] startDiscovery failed:", e?.message));
     return () => subs.forEach((sub) => sub?.remove?.());
   }, []);
 
   return (
     <>
-      <StatusBar backgroundColor="#f4511e" barStyle="light-content" />
+      <StatusBar backgroundColor={colors.primary} style="light" />
 
       <MainStack />
     </>

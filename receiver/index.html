@@ -21,10 +21,6 @@
     <title>Cast4TV Receiver</title>
     <!-- CAF receiver SDK -->
     <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
-    <!-- CAF Debug Logger: paints logs + errors as an overlay directly on the
-         TV screen. Chromecast blocks chrome://inspect remote debugging, so this
-         is how we read receiver-side logs. Safe to leave in for a debug build. -->
-    <script src="https://www.gstatic.com/cast/sdk/libs/devtools/debug_layer/caf_receiver_logger.js"></script>
     <style>
       html,
       body {
@@ -46,171 +42,63 @@
       const context = cast.framework.CastReceiverContext.getInstance();
       const playerManager = context.getPlayerManager();
 
-      // --- On-TV debug overlay -------------------------------------------
-      // Shows our log lines + CAF errors right on the television, since
-      // chrome://inspect is blocked on Chromecast hardware.
-      const LOG_TAG = "Cast4TV";
-      const castDebugLogger = cast.debug.CastDebugLogger.getInstance();
-
-      // Custom channel: broadcast our logs BACK to the phone sender so they
-      // land in Metro. chrome://inspect is blocked on Chromecast and the on-TV
-      // overlay is unreliable, so this is the channel we actually read on.
-      const DEBUG_NS = "urn:x-cast:com.cast4tv.debug";
-      const sendDebug = (level, msg) => {
-        try {
-          context.sendCustomMessage(DEBUG_NS, undefined, { level, msg });
-        } catch (e) {}
-      };
-
-      // Enable the overlay once the receiver is ready.
-      context.addEventListener(cast.framework.system.EventType.READY, () => {
-        castDebugLogger.setEnabled(true);
-        castDebugLogger.showDebugLogs(true);
-      });
-
-      // Show CORE events (errors, media status) and our own DEBUG-level tags.
-      castDebugLogger.loggerLevelByEvents = {
-        "cast.framework.events.category.CORE":
-          cast.framework.LoggerLevel.INFO,
-      };
-      castDebugLogger.loggerLevelByTags = {
-        [LOG_TAG]: cast.framework.LoggerLevel.DEBUG,
-      };
-
-      // Helper: write to BOTH the browser console and the on-TV overlay.
-      const tvLog = (msg) => {
-        console.log("[Cast4TV receiver]", msg);
-        try {
-          castDebugLogger.info(LOG_TAG, msg);
-        } catch (e) {}
-        sendDebug("log", msg);
-      };
-      const tvError = (msg) => {
-        console.error("[Cast4TV receiver]", msg);
-        try {
-          castDebugLogger.error(LOG_TAG, msg);
-        } catch (e) {}
-        sendDebug("error", msg);
-      };
-
       // Intercept every LOAD request. If the sender attached DRM info in
-      // customData, build a PlaybackConfig that points the receiver at M4's
-      // Widevine license server and forwards any custom license headers.
+      // customData, configure the PlayerManager to fetch a Widevine license
+      // from M4's license server and decrypt the stream.
       playerManager.setMessageInterceptor(
         cast.framework.messages.MessageType.LOAD,
         (loadRequest) => {
-          try {
-            const media = loadRequest && loadRequest.media;
-            const customData = (media && media.customData) || {};
-            const licenseUrl = customData.licenseUrl;
+          const media = loadRequest && loadRequest.media;
+          const customData = (media && media.customData) || {};
+          const licenseUrl = customData.licenseUrl;
 
-            // Log EXACTLY what the sender delivered. If customData is empty
-            // here, react-native-google-cast didn't forward mediaInfo.customData
-            // and licenseUrl will be undefined (Widevine never gets configured).
-            tvLog(
-              "LOAD: " +
-                JSON.stringify({
-                  contentType: media && media.contentType,
-                  streamType: media && media.streamType,
-                  hasCustomData: Object.keys(customData).length > 0,
-                  licenseUrl: customData.licenseUrl,
-                  licenseHeaders: customData.licenseHeaders,
-                })
+          if (licenseUrl) {
+            // Start from the current playback config so we don't clobber other
+            // defaults, then layer Widevine settings on top.
+            const playbackConfig = Object.assign(
+              new cast.framework.PlaybackConfig(),
+              playerManager.getPlaybackConfig()
             );
 
-            if (licenseUrl) {
-              // Start from the current playback config so we don't clobber
-              // other defaults, then layer Widevine settings on top.
-              const playbackConfig = Object.assign(
-                new cast.framework.PlaybackConfig(),
-                playerManager.getPlaybackConfig()
-              );
+            playbackConfig.licenseUrl = licenseUrl;
+            playbackConfig.protectionSystem =
+              cast.framework.ContentProtection.WIDEVINE;
 
-              playbackConfig.licenseUrl = licenseUrl;
-              playbackConfig.protectionSystem =
-                cast.framework.ContentProtection.WIDEVINE;
-
-              // Forward custom headers (Referer/Origin, etc.) onto the license
-              // POST. NOTE: browsers treat Referer/Origin as "forbidden"
-              // request headers and may strip them; connectmedia's DRM server
-              // primarily authorizes on the IP-bound token in the manifest URL,
-              // so this is best-effort and usually not required.
-              const licenseHeaders = customData.licenseHeaders;
-              if (licenseHeaders) {
-                playbackConfig.licenseRequestHandler = (requestInfo) => {
-                  requestInfo.headers = Object.assign(
-                    {},
-                    requestInfo.headers,
-                    licenseHeaders
-                  );
-                };
-              }
-
-              // Apply via the PlayerManager — assigning loadRequest.playbackConfig
-              // is IGNORED by CAF, so the licenseUrl never reaches Shaka and it
-              // fails with 6012 NO_LICENSE_SERVER_GIVEN. setPlaybackConfig is the
-              // documented way to inject a per-item license server.
-              playerManager.setPlaybackConfig(playbackConfig);
-              tvLog("Widevine configured -> " + licenseUrl);
-            } else {
-              tvError("NO licenseUrl in customData — Widevine NOT configured!");
+            // Forward custom headers (Referer/Origin, etc.) onto the license
+            // POST. Best-effort: browsers treat Referer/Origin as "forbidden"
+            // request headers and may strip them, but connectmedia authorizes
+            // primarily on the IP-bound token in the manifest URL.
+            const licenseHeaders = customData.licenseHeaders;
+            if (licenseHeaders) {
+              playbackConfig.licenseRequestHandler = (requestInfo) => {
+                requestInfo.headers = Object.assign(
+                  {},
+                  requestInfo.headers,
+                  licenseHeaders
+                );
+              };
             }
-          } catch (e) {
-            tvError("LOAD interceptor error: " + (e && e.message));
+
+            // Must be applied via setPlaybackConfig — assigning
+            // loadRequest.playbackConfig is ignored by CAF, so the licenseUrl
+            // would never reach Shaka (fails with 6012 NO_LICENSE_SERVER_GIVEN).
+            playerManager.setPlaybackConfig(playbackConfig);
           }
+
           return loadRequest;
         }
       );
 
-      // Map CAF's numeric detailedErrorCode back to a readable name so the
-      // console tells us WHICH layer failed (MEDIAKEYS_* = DRM/license,
-      // DASH_*/SEGMENT_* = manifest/segment fetch, NETWORK_* = transport).
-      const ERROR_NAMES = Object.entries(
-        cast.framework.events.DetailedErrorCode || {}
-      ).reduce((acc, [name, code]) => {
-        acc[code] = name;
-        return acc;
-      }, {});
-
-      // Log the raw license request/response so we can see if the DRM server
-      // rejects the Chromecast's challenge (status, headers actually sent).
-      playerManager.addEventListener(
-        cast.framework.events.EventType.MEDIA_STATUS,
-        (event) => {
-          if (event && event.mediaStatus && event.mediaStatus.idleReason) {
-            tvLog("idleReason: " + event.mediaStatus.idleReason);
-          }
-        }
-      );
-
+      // Log playback errors to the receiver console (chrome://inspect on a
+      // supported device, or the Cast Command & Control tool).
       playerManager.addEventListener(
         cast.framework.events.EventType.ERROR,
         (event) => {
-          const code = event && event.detailedErrorCode;
-          tvError(
-            "ERROR: " +
-              JSON.stringify({
-                detailedErrorCode: code,
-                name: ERROR_NAMES[code],
-                reason: event && event.reason,
-                error: event && event.error,
-              })
-          );
+          console.error("[Cast4TV] playback error:", event);
         }
       );
 
-      // Register the debug namespace so sendCustomMessage can broadcast on it,
-      // and mark the receiver version so we can confirm the device loaded the
-      // LATEST build (Chromecast caches receivers aggressively — if the version
-      // below doesn't show up in Metro, the device is serving a stale copy and
-      // needs a reboot to refresh).
-      const RECEIVER_VERSION = "debug-4";
-      const options = new cast.framework.CastReceiverOptions();
-      options.customNamespaces = Object.assign({}, options.customNamespaces, {
-        [DEBUG_NS]: cast.framework.system.MessageType.JSON,
-      });
-      context.start(options);
-      tvLog("receiver started, version=" + RECEIVER_VERSION);
+      context.start();
     </script>
   </body>
 </html>

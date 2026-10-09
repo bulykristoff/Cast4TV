@@ -24,6 +24,15 @@
     },
     "plugins": [
       [
+        "react-native-video",
+        {
+          "//": "Background playback + YouTube-style Picture-in-Picture. enableBackgroundAudio adds the iOS `audio` UIBackgroundMode; enableAndroidPictureInPicture sets android:supportsPictureInPicture on MainActivity; enableNotificationControls runs a media foreground service so Android keeps the stream alive in the background. See RenderChannel's playInBackground / enterPictureInPictureOnLeave props.",
+          "enableBackgroundAudio": true,
+          "enableAndroidPictureInPicture": true,
+          "enableNotificationControls": true
+        }
+      ],
+      [
         "react-native-google-cast",
         {
           "//": "Custom Web Receiver App ID. Required for Widevine DRM casting — the Default Media Receiver (CC1AD845) cannot decrypt M4's stream. Register receiver/index.html in the Cast SDK Developer Console and paste the App ID below. See receiver/README.md.",

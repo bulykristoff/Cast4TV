@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { View, Text, Button, ActivityIndicator, StyleSheet } from "react-native";
+import { View, Text, ActivityIndicator, StyleSheet } from "react-native";
 import Video, { DRMType } from "react-native-video";
 import useUrlStore from "../../zustand/useUrlStore";
 import { useRemoteMediaClient } from "react-native-google-cast";
@@ -7,11 +7,16 @@ import { loadStreamToChromecast } from "../shared/loadStreamToChromecast";
 import { fetchVideoURL } from "../shared/fetchVideoUrl";
 import { useFocusEffect } from "@react-navigation/native";
 import * as ScreenOrientation from "expo-screen-orientation";
+import AppButton from "../shared/AppButton";
+import { colors } from "../../theme";
 
 const MAX_AUTO_RETRIES = 3;
 
 const RenderChannel = ({ route }) => {
-  const { channel } = route.params;
+  // A channel is either scraped from mediaklikk (`channel` id) or a direct HLS
+  // URL (`streamUrl`, from the iptv-org playlist). See navigation.js.
+  const { channel, channelName, logoUrl, streamUrl } = route.params;
+  const isDirect = !!streamUrl;
 
   const client = useRemoteMediaClient();
 
@@ -29,27 +34,6 @@ const RenderChannel = ({ route }) => {
   const playerRef = useRef(null);
   const retryCount = useRef(0);
 
-  // DEBUG: log everything the receiver reports back over the cast channel.
-  // The phone's console never sees the TV's own console.log, but it DOES see
-  // media-status updates — including the idleReason that tells us WHY the
-  // receiver stopped (e.g. "error" = load/decrypt failure on the TV).
-  useEffect(() => {
-    if (!client) return;
-    console.log("* [CAST] client connected — subscribing to media status");
-    const sub = client.onMediaStatusUpdated((status) => {
-      console.log(
-        "* [CAST] status:",
-        JSON.stringify({
-          playerState: status?.playerState,
-          idleReason: status?.idleReason,
-          contentType: status?.mediaInfo?.contentType,
-          contentUrl: status?.mediaInfo?.contentUrl,
-        })
-      );
-    });
-    return () => sub?.remove?.();
-  }, [client]);
-
   useEffect(() => {
     // If we have both a Chromecast client and a stream URL, cast immediately.
     if (!client || !videoURL) return;
@@ -65,7 +49,14 @@ const RenderChannel = ({ route }) => {
     const tryLoad = () => {
       if (cancelled) return;
       attempt += 1;
-      loadStreamToChromecast({ client, url: videoURL, licenseServer })
+      loadStreamToChromecast({
+        client,
+        url: videoURL,
+        licenseServer,
+        channelName,
+        logoUrl,
+        directStream: isDirect,
+      })
         .then(() => {
           if (cancelled) return;
           // Pause local player so you don't double-play.
@@ -91,13 +82,20 @@ const RenderChannel = ({ route }) => {
     return () => {
       cancelled = true;
     };
-  }, [client, videoURL, licenseServer]);
+  }, [client, videoURL, licenseServer, channelName, logoUrl, isDirect]);
 
   const playMedia = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      // Always re-scrape so we get a fresh, IP-tokenized stream URL.
+      // Direct iptv-org channels have a fixed, DRM-free URL — no scraping.
+      if (streamUrl) {
+        setVideoURL(streamUrl);
+        setLicenseServer(null);
+        setUrl(streamUrl);
+        return;
+      }
+      // M4 channels: re-scrape so we get a fresh, IP-tokenized stream URL.
       const source = await fetchVideoURL({ channel });
       if (source?.url) {
         setVideoURL(source.url);
@@ -111,7 +109,7 @@ const RenderChannel = ({ route }) => {
     } finally {
       setLoading(false);
     }
-  }, [channel, setUrl]);
+  }, [channel, streamUrl, setUrl]);
 
   useFocusEffect(
     useCallback(() => {
@@ -178,13 +176,21 @@ const RenderChannel = ({ route }) => {
 
   const loadStream = () => {
     const url = getUrl();
-    loadStreamToChromecast({ client, url, licenseServer });
+    loadStreamToChromecast({
+      client,
+      url,
+      licenseServer,
+      channelName,
+      logoUrl,
+      directStream: isDirect,
+    });
   };
 
   if (loading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator size="large" color="#f4511e" />
+        <ActivityIndicator size="large" color={colors.primary} />
+        <Text style={styles.loadingText}>Loading {channelName}…</Text>
       </View>
     );
   }
@@ -193,9 +199,11 @@ const RenderChannel = ({ route }) => {
     return (
       <View style={styles.centered}>
         <Text style={styles.errorText}>{error}</Text>
-        <View style={{ marginTop: 16 }}>
-          <Button title="Restart Stream" onPress={handleRestart} />
-        </View>
+        <AppButton
+          title="Restart Stream"
+          onPress={handleRestart}
+          style={styles.errorButton}
+        />
       </View>
     );
   }
@@ -235,6 +243,13 @@ const RenderChannel = ({ route }) => {
           style={styles.video}
           controls={true}
           resizeMode="contain"
+          // Keep the stream alive when the phone is locked or the user switches
+          // apps, and auto-shrink into a floating Picture-in-Picture window on
+          // leave (YouTube-style). Backed by the native config in app.json
+          // (background audio / PiP support / media-notification service).
+          playInBackground={true}
+          playWhenInactive={true}
+          enterPictureInPictureOnLeave={true}
           onError={handleVideoError}
           onLoad={handleLoad}
           onBuffer={({ isBuffering }) => setBuffering(isBuffering)}
@@ -243,28 +258,36 @@ const RenderChannel = ({ route }) => {
         />
         {buffering && (
           <View style={styles.bufferOverlay} pointerEvents="none">
-            <ActivityIndicator size="large" color="#f4511e" />
+            <ActivityIndicator size="large" color={colors.primary} />
           </View>
         )}
       </View>
+      <View style={styles.info}>
+        <Text style={styles.nowPlayingLabel}>NOW PLAYING</Text>
+        <Text style={styles.channelName}>{channelName}</Text>
+      </View>
       <View style={styles.buttons}>
-        <Button title="Restart Stream" onPress={handleRestart} />
-        <Button title="Load stream to device" onPress={loadStream} />
+        <AppButton
+          title="Restart Stream"
+          onPress={handleRestart}
+          variant="secondary"
+        />
+        <AppButton title="Load stream to device" onPress={loadStream} />
       </View>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "black" },
+  container: { flex: 1, backgroundColor: colors.background },
   centered: {
     flex: 1,
-    backgroundColor: "black",
+    backgroundColor: colors.background,
     justifyContent: "center",
     alignItems: "center",
-    padding: 20,
+    padding: 24,
   },
-  video: { width: "100%", height: 300 },
+  video: { width: "100%", height: 300, backgroundColor: "#000" },
   bufferOverlay: {
     position: "absolute",
     top: 0,
@@ -273,9 +296,39 @@ const styles = StyleSheet.create({
     height: 300,
     justifyContent: "center",
     alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.35)",
   },
-  errorText: { color: "white", textAlign: "center", fontSize: 16 },
-  buttons: { paddingHorizontal: 10, gap: 10, marginTop: 10 },
+  loadingText: {
+    color: colors.textMuted,
+    marginTop: 16,
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  errorText: {
+    color: colors.text,
+    textAlign: "center",
+    fontSize: 16,
+    lineHeight: 22,
+  },
+  errorButton: { marginTop: 24, alignSelf: "stretch" },
+  info: {
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 4,
+  },
+  nowPlayingLabel: {
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 1.5,
+  },
+  channelName: {
+    color: colors.text,
+    fontSize: 24,
+    fontWeight: "800",
+    marginTop: 4,
+  },
+  buttons: { paddingHorizontal: 20, gap: 12, marginTop: 20 },
 });
 
 export default RenderChannel;
