@@ -25,9 +25,9 @@ development build (`expo-dev-client` is installed). Builds are produced with EAS
 
 ```bash
 eas build --profile dev          # internal dev client (APK on Android)
-eas build --profile localProd     # internal release build (channel: localProd, receives EAS Updates)
+eas build --profile localProd     # internal release build (channel: localprod, receives EAS Updates)
 eas build --profile production    # store production build (no update channel)
-eas update --channel localProd    # publish an OTA update to localProd builds
+eas update --channel localprod    # publish an OTA update to localProd builds
 ```
 
 EAS project config lives in `eas.json` and `app.json` (`extra.eas.projectId`).

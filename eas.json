@@ -17,7 +17,7 @@
       },
       "localProd": {
         "distribution": "internal",
-        "channel": "localProd"
+        "channel": "localprod"
       },
       "production": {
         "ios": {
