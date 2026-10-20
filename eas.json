@@ -16,7 +16,8 @@
         }
       },
       "localProd": {
-        "distribution": "internal"
+        "distribution": "internal",
+        "channel": "localProd"
       },
       "production": {
         "ios": {
@@ -25,8 +26,7 @@
         },
         "android": {
           "resourceClass": "medium"
-        },
-        "channel": "production"  
+        }
       }
     },
     "submit": {

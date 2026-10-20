@@ -69,6 +69,13 @@ const CHANNELS = [
     },
   },
   {
+    name: "TennisChannel2",
+    title: "Tennis Channel 2",
+    logoUrl:
+      "https://image-resizer-cloud-cdn.api.cms.amdvids.com/image/7382296F-97F6-4450-B77B-8FE331FC04F6/3-1x1.png",
+    params: { streamUrl: "https://mumbai-edge.smartplaytv.in/Tennis2/index.m3u8" },
+  },
+  {
     name: "Unbeaten",
     title: "Unbeaten",
     logoUrl: "https://i.imgur.com/LmkNt3v.png",
